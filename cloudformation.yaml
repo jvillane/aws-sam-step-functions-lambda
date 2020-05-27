@@ -219,4 +219,4 @@ Resources:
 Outputs:
   ApiUrl:
     Description: API URL
-    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/calculator
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/random-workflow
