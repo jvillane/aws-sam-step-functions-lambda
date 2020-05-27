@@ -1,0 +1,133 @@
+openapi: 3.0.1
+info:
+  title: Api Mocker
+  description: Automated testing application for TGR
+  contact:
+    name: Patagonia-IT
+    url: http://www.patagonia-it.com
+    email: contacto@patagonia-it.com
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+  version: 1.0.0
+
+x-amazon-apigateway-request-validators:
+  params:
+    validateRequestParameters: true
+    validateRequestBody: false
+
+x-amazon-apigateway-request-validator: params
+
+paths:
+  /workflow:
+    post:
+      x-amazon-apigateway-integration:
+        credentials:
+          Fn::GetAtt: [ ApiGatewayStepFunctionsRole, Arn ]
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:states:action/StartExecution
+        httpMethod: POST
+        type: aws
+        responses:
+          default:
+            statusCode: 200
+            responseTemplates:
+              application/json: |
+                { "executionId": "$input.json('executionArn').split(':').get(7) }
+        requestTemplates:
+          application/json:
+            Fn::Sub: |-
+              {
+                "input": "$util.escapeJavaScript($input.json('$'))",
+                "name": "$context.requestId",
+                "stateMachineArn": "${Workflow}"
+              }
+      summary: Start workflow instance
+      responses:
+        200:
+          $ref: '#/components/responses/200Execution'
+        403:
+          $ref: '#/components/responses/Error'
+  /workflow/{executionId}:
+    get:
+      x-amazon-apigateway-integration:
+        credentials:
+          Fn::GetAtt: [ ApiGatewayStepFunctionsRole, Arn ]
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:states:action/DescribeExecution
+        httpMethod: POST
+        type: aws
+        responses:
+          default:
+            statusCode: 200
+            responseTemplates:
+              application/json: |-
+                #set ($status = $input.json('status'))
+                {
+                #if($status == '"SUCCEEDED"')
+                  "output": $util.parseJson($input.json('output')),
+                #end
+                  "status": $status
+                }
+        requestTemplates:
+          application/json:
+            Fn::Sub: |-
+              {
+                "executionArn": "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:${Workflow.Name}:$input.params().path.get('executionId')"
+              }
+      summary: Workflow execution status
+      responses:
+        200:
+          $ref: '#/components/responses/200ExecutionDetails'
+
+components:
+  schemas:
+    ExecutionCreated:
+      title: Created execution
+      type: object
+      properties:
+        executionId:
+          type: string
+      required:
+        - executionId
+    ExecutionDetails:
+      title: Execution Details
+      type: object
+      properties:
+        output:
+          type: object
+        status:
+          type: string
+      required:
+        - status
+    Error:
+      title: Error
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      required:
+        - code
+        - message
+
+  responses:
+    200Execution:
+      description: Result response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ExecutionCreated'
+    200ExecutionDetails:
+      description: Execution Details
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ExecutionDetails'
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  The turtle calculator, a dummy slow calculator for comprehensive code example
+
+Parameters:
+  OpenAPIS3File:
+    Description: '"openapi.yaml" file location'
+    Default: ./openapi.yaml
+    Type: String
+
+Globals:
+  Function:
+    Runtime: nodejs12.x
+    Timeout: 30
+    MemorySize: 256
+
+Resources:
+  LambdaRoleForRuleExecution:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 'sts:AssumeRole'
+            Principal:
+              Service: lambda.amazonaws.com
+      Policies:
+        - PolicyName: WriteCloudWatchLogs
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+
+  ApiGatewayStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: !Join ["", ["/", !Ref "AWS::StackName", "/"]]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowApiGatewayServiceToAssumeRole
+            Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+      Policies:
+        - PolicyName: CallStepFunctions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'states:StartExecution'
+                Resource: !Ref Workflow
+        - PolicyName: DescribeStepFunctionExecutions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'states:DescribeExecution'
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:${Workflow.Name}:*
+
+  StateExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - !Sub states.${AWS::Region}.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: "StatesExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "lambda:InvokeFunction"
+                Resource:
+                  - !GetAtt RandomNumber.Arn
+                  - !GetAtt Init.Arn
+                  - !GetAtt Execute.Arn
+                  - !GetAtt End.Arn
+
+  RandomNumber:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: dist/
+      Handler: random-number.handler
+      Role: !GetAtt LambdaRoleForRuleExecution.Arn
+
+  Init:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: dist/
+      Handler: map.init
+      Role: !GetAtt LambdaRoleForRuleExecution.Arn
+
+  Execute:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: dist/
+      Handler: map.execute
+      Role: !GetAtt LambdaRoleForRuleExecution.Arn
+
+  End:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: dist/
+      Handler: map.end
+      Role: !GetAtt LambdaRoleForRuleExecution.Arn
+
+  Workflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub ${AWS::StackName}-state-machine
+      RoleArn: !GetAtt StateExecutionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "AWS Step Functions Example",
+          "StartAt": "RandomNumber",
+          "Version": "1.0",
+          "States": {
+            "RandomNumber": {
+              "Type": "Task",
+              "Resource": "${RandomNumber.Arn}",
+              "Next": "Revision",
+              "Retry": [{
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 2,
+                "BackoffRate": 2.0
+              }],
+              "Catch": [{
+                "ErrorEquals": ["States.TaskFailed"],
+                "Next": "Unlucky13"
+              }]
+            },
+            "Revision": {
+              "Type": "Choice",
+              "Default": "Init",
+              "Choices": [{
+                "Variable": "$.number",
+                "NumericEquals": 7,
+                "Next": "Lucky7"
+              }, {
+                "Variable": "$.number",
+                "NumericEquals": 13,
+                "Next": "Unlucky13"
+              }]
+            },
+            "Init": {
+              "Type": "Task",
+              "Resource": "${Init.Arn}",
+              "Next": "Map"
+            },
+            "Map": {
+              "Type": "Map",
+              "ItemsPath": "$.numbers",
+              "MaxConcurrency": 2,
+              "Next": "End",
+              "Iterator": {
+                "StartAt": "Execute",
+                "States": {
+                  "Execute": {
+                    "Type": "Task",
+                    "Resource": "${Execute.Arn}",
+                    "Next": "WaitPlz"
+                  },
+                  "WaitPlz": {
+                    "Type": "Wait",
+                    "Seconds": 2,
+                    "End": true
+                  }
+                }
+              }
+            },
+            "End": {
+              "Type": "Task",
+              "Resource": "${End.Arn}",
+              "End": true
+            },
+            "Lucky7": {
+              "Type": "Succeed"
+            },
+            "Unlucky13": {
+              "Type": "Fail",
+              "Cause": "Bad luck",
+              "Error": ":("
+            }
+          }
+        }
+
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: random-workflow
+      Name: !Sub ${AWS::StackName}-api
+      DefinitionBody:
+        'Fn::Transform':
+          Name: AWS::Include
+          Parameters:
+            Location: !Ref OpenAPIS3File
+
+Outputs:
+  ApiUrl:
+    Description: API URL
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/calculator
