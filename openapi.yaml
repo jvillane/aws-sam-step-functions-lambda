@@ -19,7 +19,7 @@ x-amazon-apigateway-request-validators:
 x-amazon-apigateway-request-validator: params
 
 paths:
-  /workflow:
+  /:
     post:
       x-amazon-apigateway-integration:
         credentials:
@@ -48,7 +48,7 @@ paths:
           $ref: '#/components/responses/200Execution'
         403:
           $ref: '#/components/responses/Error'
-  /workflow/{executionId}:
+  /{executionId}:
     get:
       x-amazon-apigateway-integration:
         credentials:
